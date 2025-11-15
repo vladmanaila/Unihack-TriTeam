@@ -9,6 +9,7 @@ import { auth, db } from "../firebaseConfig";
 import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
 import RealtimeCallModal from "@/components/RealtimeCallModal";
+import FileUploadCallModal from "@/components/FileUploadCallModal";
 
 interface Recording {
   id: string;
@@ -45,6 +46,8 @@ const Dashboard = () => {
     return () => unsubscribe();
   }, []);
   const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
+
 
   const fetchUserRecordings = async (userId: string) => {
     try {
@@ -122,11 +125,26 @@ const Dashboard = () => {
           <p className="text-white/90 mb-6">Ready to coach your next sales call?</p>
           
           <div className="flex flex-wrap gap-4">
-            <Button variant="hero" size="lg" className="bg-white text-primary hover:bg-white/90" onClick={() => setShowRecordingModal(true)}>
-              <Mic className="mr-2" />
-              Record Call
-            </Button>
-          </div>
+  <Button
+    variant="hero"
+    size="lg"
+    className="bg-white text-primary hover:bg-white/90"
+    onClick={() => setShowRecordingModal(true)}
+  >
+    <Mic className="mr-2" />
+    Record Call
+  </Button>
+
+  <Button
+    variant="hero"
+    size="lg"
+    className="bg-white text-primary hover:bg-white/90"
+    onClick={() => setShowUploadModal(true)}
+  >
+    Upload Call
+  </Button>
+</div>
+
         </div>
 
         {/* Stats Overview */}
@@ -249,6 +267,16 @@ const Dashboard = () => {
       onCancel={() => setShowRecordingModal(false)}
     />
   )}
+  {showUploadModal && (
+  <FileUploadCallModal
+    onComplete={() => {
+      setShowUploadModal(false);
+      if (user) fetchUserRecordings(user.uid);
+    }}
+    onCancel={() => setShowUploadModal(false)}
+  />
+)}
+
 
     </div>
   );
