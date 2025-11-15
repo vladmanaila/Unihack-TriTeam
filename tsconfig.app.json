@@ -26,5 +26,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "firebaseConfig.ts"]
+  "include": ["src", "firebaseConfig.ts", "types.ts"]
 }

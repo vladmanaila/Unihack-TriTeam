@@ -8,6 +8,7 @@ import { useState, useEffect } from "react";
 import { auth, db } from "../firebaseConfig";
 import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
 import { onAuthStateChanged } from "firebase/auth";
+import RealtimeCallModal from "@/components/RealtimeCallModal";
 
 interface Recording {
   id: string;
@@ -43,6 +44,7 @@ const Dashboard = () => {
 
     return () => unsubscribe();
   }, []);
+  const [showRecordingModal, setShowRecordingModal] = useState(false);
 
   const fetchUserRecordings = async (userId: string) => {
     try {
@@ -53,6 +55,7 @@ const Dashboard = () => {
         where("userId", "==", userId),
         orderBy("date", "desc")
       );
+      
       
       const querySnapshot = await getDocs(q);
       const userRecordings: Recording[] = [];
@@ -119,7 +122,7 @@ const Dashboard = () => {
           <p className="text-white/90 mb-6">Ready to coach your next sales call?</p>
           
           <div className="flex flex-wrap gap-4">
-            <Button variant="hero" size="lg" className="bg-white text-primary hover:bg-white/90">
+            <Button variant="hero" size="lg" className="bg-white text-primary hover:bg-white/90" onClick={() => setShowRecordingModal(true)}>
               <Mic className="mr-2" />
               Record Call
             </Button>
@@ -237,6 +240,16 @@ const Dashboard = () => {
           )}
         </div>
       </main>
+          {showRecordingModal && (
+    <RealtimeCallModal
+      onComplete={() => {
+        setShowRecordingModal(false);
+        if (user) fetchUserRecordings(user.uid);
+      }}
+      onCancel={() => setShowRecordingModal(false)}
+    />
+  )}
+
     </div>
   );
 };
