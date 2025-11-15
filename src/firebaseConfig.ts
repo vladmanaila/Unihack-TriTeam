@@ -3,14 +3,18 @@ import { getAuth, GoogleAuthProvider, OAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // ADAUGĂ ASTA
 
-const firebaseConfig = {
+
+ const firebaseConfig = {
   apiKey: "AIzaSyAbPs4aDxxB4uePDRKRgEbT_BiZJofpU7s",
   authDomain: "unihack---coach.firebaseapp.com",
+  databaseURL: "https://unihack---coach-default-rtdb.europe-west1.firebasedatabase.app",
   projectId: "unihack---coach",
-  storageBucket: "unihack---coach.appspot.com",
+  storageBucket: "unihack---coach.firebasestorage.app",
   messagingSenderId: "125770597498",
   appId: "1:125770597498:web:2feb4e3f1f6797c6b867c3",
   measurementId: "G-ZQGWBSRKPK"
+
+
 };
 
 const app = initializeApp(firebaseConfig);

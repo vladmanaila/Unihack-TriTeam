@@ -49,6 +49,7 @@ export const useSalesCoach = () => {
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const recordingStartTimeRef = useRef<number>(0);
+    const speakerNamesRef = useRef<Map<string, string>>(new Map());
     
     // Storage for segments
     const geminiSegmentsRef = useRef<LiveSegment[]>([]);
@@ -127,6 +128,71 @@ export const useSalesCoach = () => {
         setTranscript(displayText);
     }, []);
 
+    const getSpeakerName = useCallback((speakerId: string): string => {
+        if (speakerNamesRef.current.has(speakerId)) {
+            return speakerNamesRef.current.get(speakerId)!;
+        }
+        
+        const count = speakerNamesRef.current.size;
+        const name = `Speaker ${String.fromCharCode(65 + count)}`; // A, B, C...
+        speakerNamesRef.current.set(speakerId, name);
+        return name;
+    }, []);
+
+    // Analyze text from Azure transcription with Gemini
+    const analyzeTextWithGemini = useCallback(async (text: string, timestamp: number) => {
+        if (!geminiSessionRef.current || !text || text.trim().length < 5) return;
+
+        try {
+            const model = geminiSessionRef.current;
+            
+            // Analyze the transcript text
+            const analysisResult = await model.generateContent([
+                `Analyze this sales conversation text and provide ONLY a JSON object (no markdown, no code blocks):
+{"emotion":"joy/calm/nervousness/anger/neutral","sentiment":"positive/neutral/negative","feedback":"brief coaching tip"}
+
+Text: "${text}"`
+            ]);
+
+            let analysisText = analysisResult.response.text();
+            
+            // Strip markdown code blocks if present
+            analysisText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+            
+            try {
+                const parsed = JSON.parse(analysisText);
+                
+                geminiSegmentsRef.current.push({
+                    text: text,
+                    emotion: parsed.emotion,
+                    sentiment: parsed.sentiment,
+                    timestamp: timestamp
+                });
+
+                if (parsed.feedback) {
+                    setRealtimeFeedback(prev => [parsed.feedback, ...prev].slice(0, 5));
+                }
+
+                mergeSegments();
+            } catch (e) {
+                console.error('Failed to parse Gemini response:', e);
+                console.log('Raw response:', analysisText);
+                
+                // Fallback: save text without analysis
+                geminiSegmentsRef.current.push({
+                    text: text,
+                    emotion: undefined,
+                    sentiment: undefined,
+                    timestamp: timestamp
+                });
+                mergeSegments();
+            }
+        } catch (apiError) {
+            console.error('Gemini API error:', apiError);
+            // Continue without breaking the recording
+        }
+    }, [mergeSegments]);
+
     // Start Gemini Live Audio Session
     const startGeminiLiveSession = async () => {
         try {
@@ -143,7 +209,7 @@ export const useSalesCoach = () => {
     };
 
     // Start Azure Speaker Diarization
-    const startAzureDiarization = async () => {
+    const startAzureDiarization = useCallback(async () => {
         const sdk = (window as any).Microsoft?.CognitiveServices?.Speech;
         if (!sdk) return;
 
@@ -171,6 +237,9 @@ export const useSalesCoach = () => {
                     azureSegmentsRef.current.push(segment);
                     setCurrentSpeaker(segment.speakerId);
                     
+                    // Send text to Gemini for emotion/sentiment analysis
+                    analyzeTextWithGemini(e.result.text, currentTime);
+                    
                     // Merge with Gemini data
                     mergeSegments();
                 }
@@ -192,228 +261,18 @@ export const useSalesCoach = () => {
             console.error('Azure diarization error:', error);
             setError('Failed to start speaker identification');
         }
+    }, [analyzeTextWithGemini, mergeSegments, getSpeakerName]);
+
+    const formatTime = (seconds: number): string => {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const speakerNamesRef = useRef<Map<string, string>>(new Map());
-    
-    const getSpeakerName = (speakerId: string): string => {
-        if (speakerNamesRef.current.has(speakerId)) {
-            return speakerNamesRef.current.get(speakerId)!;
-        }
-        
-        const count = speakerNamesRef.current.size;
-        const name = `Speaker ${String.fromCharCode(65 + count)}`; // A, B, C...
-        speakerNamesRef.current.set(speakerId, name);
-        return name;
-    };
-
-    // Send audio chunks to Gemini
-    const sendAudioToGemini = useCallback(async (audioBlob: Blob) => {
-        if (!geminiSessionRef.current) return;
-
-        try {
-            const reader = new FileReader();
-            reader.readAsDataURL(audioBlob);
-            
-            reader.onloadend = async () => {
-                const base64Audio = (reader.result as string).split(',')[1];
-                
-                const model = geminiSessionRef.current;
-                const result = await model.generateContent({
-  prompt: {
-    text: `Analyze this audio segment and provide:
-1. Transcribed text
-2. Detected emotion (joy, confidence, calm, anger, sadness, nervousness, enthusiasm, boredom)
-3. Sentiment (positive, neutral, negative)
-4. Brief coaching feedback
-
-Format as JSON: {"text":"...","emotion":"...","sentiment":"...","feedback":"..."}`
-  },
-  multimodalInputs: [
-    {
-      mimeType: 'audio/webm',
-      data: base64Audio
-    }
-  ]
-});
-
-                
-                const text = result.response.text();
-                try {
-                    const parsed = JSON.parse(text);
-                    const currentTime = (Date.now() - recordingStartTimeRef.current) / 1000;
-                    
-                    geminiSegmentsRef.current.push({
-                        text: parsed.text,
-                        emotion: parsed.emotion,
-                        sentiment: parsed.sentiment,
-                        timestamp: currentTime
-                    });
-
-                    if (parsed.feedback) {
-                        setRealtimeFeedback(prev => [parsed.feedback, ...prev].slice(0, 5));
-                    }
-
-                    mergeSegments();
-                } catch (e) {
-                    console.error('Failed to parse Gemini response', e);
-                }
-            };
-        } catch (error) {
-            console.error('Error sending audio to Gemini:', error);
-        }
-    }, [mergeSegments]);
-
-    const startRecording = async () => {
-        if (isSDKLoading) return;
-
-        setRecordingState(RecordingState.RECORDING);
-        setTranscript('');
-        setRealtimeFeedback([]);
-        setError(null);
-        geminiSegmentsRef.current = [];
-        azureSegmentsRef.current = [];
-        combinedTranscriptRef.current = [];
-        audioChunksRef.current = [];
-        speakerNamesRef.current.clear();
-        recordingStartTimeRef.current = Date.now();
-
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-            // Start MediaRecorder for full audio capture
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-            mediaRecorderRef.current = mediaRecorder;
-
-            mediaRecorder.ondataavailable = async (event) => {
-                if (event.data.size > 0) {
-                    audioChunksRef.current.push(event.data);
-                    
-                    // Send chunk to Gemini
-                    await sendAudioToGemini(event.data);
-                }
-            };
-
-            // Collect chunks every 3 seconds for Gemini
-            mediaRecorder.start(3000);
-
-            // Start both services
-            await Promise.all([
-                startGeminiLiveSession(),
-                startAzureDiarization()
-            ]);
-
-        } catch (error) {
-            console.error('Failed to start recording:', error);
-            setError('Could not access microphone');
-            setRecordingState(RecordingState.IDLE);
-        }
-    };
-
-    const stopRecording = useCallback(async () => {
-        if (azureTranscriberRef.current) {
-            await azureTranscriberRef.current.stopTranscribingAsync();
-        }
-        
-        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-            mediaRecorderRef.current.stop();
-        }
-        
-        setRecordingState(RecordingState.ANALYZING);
-        
-        // Wait a bit for final segments
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Final merge
-        mergeSegments();
-        
-        // Now analyze with Gemini Pro (full audio)
-        await analyzeFullRecording();
-    }, [mergeSegments]);
-
-    // Analyze complete recording with Gemini Pro
-    const analyzeFullRecording = async () => {
-        try {
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-            
-            const fullAudioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-            
-            const reader = new FileReader();
-            reader.readAsDataURL(fullAudioBlob);
-            
-            reader.onloadend = async () => {
-                const base64Audio = (reader.result as string).split(',')[1];
-                
-                const result = await model.generateContent([
-                    { 
-                        inlineData: {
-                            mimeType: 'audio/webm',
-                            data: base64Audio
-                        }
-                    },
-                    `Analyze this complete sales conversation audio and provide:
-1. Overall sentiment analysis
-2. Key emotional patterns and shifts
-3. Communication strengths (what went well)
-4. Areas for improvement (missed opportunities)
-5. Specific coaching recommendations
-6. Talk-to-listen ratio assessment
-7. Question quality analysis
-8. Objection handling evaluation
-
-Provide actionable insights for sales improvement.`
-                ]);
-
-                const analysisText = result.response.text();
-                await saveToFirebase(analysisText);
-            };
-
-        } catch (error) {
-            console.error('Full analysis error:', error);
-            setError('Failed to analyze recording');
-        }
-    };
-
-    const saveToFirebase = async (geminiAnalysis: string) => {
-        try {
-            const user = auth.currentUser;
-            if (!user) throw new Error("Not authenticated");
-
-            // Upload audio
-            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-            const timestamp = Date.now();
-            const storageRef = ref(storage, `recordings/${user.uid}/${timestamp}.webm`);
-            await uploadBytes(storageRef, audioBlob);
-            const audioUrl = await getDownloadURL(storageRef);
-
-            // Calculate metrics
-            const metrics = calculateMetrics();
-            const coachingCards = generateCoachingCards(geminiAnalysis);
-
-            // Save to Firestore
-            await addDoc(collection(db, "recordings"), {
-                title: `Sales Call - ${new Date().toLocaleDateString()}`,
-                audioFileUrl: audioUrl,
-                transcript: combinedTranscriptRef.current.map(s => `[${s.speaker}] ${s.text}`),
-                transcriptSegments: JSON.stringify(combinedTranscriptRef.current),
-                sentimentGraph: JSON.stringify(generateSentimentGraph()),
-                coachingCard: coachingCards,
-                geminiFullAnalysis: geminiAnalysis,
-                recordingStats: metrics,
-                speakers: JSON.stringify(Array.from(speakerNamesRef.current.entries())),
-                userId: user.uid,
-                date: serverTimestamp(),
-                duration: formatDuration()
-            });
-
-            setRecordingState(RecordingState.DONE);
-            alert('Recording saved successfully!');
-
-        } catch (error) {
-            console.error('Save error:', error);
-            setError('Failed to save recording');
-        }
+    const formatDuration = (): string => {
+        if (combinedTranscriptRef.current.length === 0) return "0:00";
+        const last = combinedTranscriptRef.current[combinedTranscriptRef.current.length - 1];
+        return formatTime(last.end);
     };
 
     const calculateMetrics = () => {
@@ -502,17 +361,160 @@ Provide actionable insights for sales improvement.`
         return points;
     };
 
-    const formatTime = (seconds: number): string => {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
-        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    const saveToFirebase = async (geminiAnalysis: string) => {
+        try {
+            const user = auth.currentUser;
+            if (!user) throw new Error("Not authenticated");
+
+            // Upload audio
+            const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+            const timestamp = Date.now();
+            const storageRef = ref(storage, `recordings/${user.uid}/${timestamp}.webm`);
+            await uploadBytes(storageRef, audioBlob);
+            const audioUrl = await getDownloadURL(storageRef);
+
+            // Calculate metrics
+            const metrics = calculateMetrics();
+            const coachingCards = generateCoachingCards(geminiAnalysis);
+
+            // Save to Firestore
+            await addDoc(collection(db, "recordings"), {
+                title: `Sales Call - ${new Date().toLocaleDateString()}`,
+                audioFileUrl: audioUrl,
+                transcript: combinedTranscriptRef.current.map(s => `[${s.speaker}] ${s.text}`),
+                transcriptSegments: JSON.stringify(combinedTranscriptRef.current),
+                sentimentGraph: JSON.stringify(generateSentimentGraph()),
+                coachingCard: coachingCards,
+                geminiFullAnalysis: geminiAnalysis,
+                recordingStats: metrics,
+                speakers: JSON.stringify(Array.from(speakerNamesRef.current.entries())),
+                userId: user.uid,
+                date: serverTimestamp(),
+                duration: formatDuration()
+            });
+
+            setRecordingState(RecordingState.DONE);
+            alert('Recording saved successfully!');
+
+        } catch (error) {
+            console.error('Save error:', error);
+            setError('Failed to save recording');
+        }
     };
 
-    const formatDuration = (): string => {
-        if (combinedTranscriptRef.current.length === 0) return "0:00";
-        const last = combinedTranscriptRef.current[combinedTranscriptRef.current.length - 1];
-        return formatTime(last.end);
+    // Analyze complete recording with Gemini Pro
+    const analyzeFullRecording = useCallback(async () => {
+        try {
+            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            
+            // Use the combined transcript from Azure
+            const fullTranscript = combinedTranscriptRef.current
+                .map(seg => `[${seg.speaker}] ${seg.text}`)
+                .join('\n');
+            
+            if (!fullTranscript || fullTranscript.trim().length < 50) {
+                console.log('Transcript too short for full analysis, saving with basic data');
+                await saveToFirebase('Recording completed. Transcript was too short for detailed analysis.');
+                return;
+            }
+            
+            try {
+                // Analyze the full transcript
+                const analysisResult = await model.generateContent([
+                    `Analyze this complete sales conversation transcript and provide:
+1. Overall sentiment analysis
+2. Key emotional patterns and shifts
+3. Communication strengths (what was done well)
+4. Areas for improvement (missed opportunities)
+5. Coaching recommendations
+6. Talk-to-listen ratio assessment
+7. Question quality evaluation
+8. Objection handling review
+
+Provide actionable insights for sales improvement.
+
+Transcript:
+${fullTranscript}`
+                ]);
+
+                const analysisText = analysisResult.response.text();
+                await saveToFirebase(analysisText);
+            } catch (apiError) {
+                console.error('Gemini API error in full analysis:', apiError);
+                await saveToFirebase('Recording completed. Full transcript available for review.');
+            }
+
+        } catch (error) {
+            console.error('Full analysis error:', error);
+            // Still try to save what we have
+            await saveToFirebase('Recording completed with partial data.');
+        }
+    }, []);
+
+    const startRecording = async () => {
+        if (isSDKLoading) return;
+
+        setRecordingState(RecordingState.RECORDING);
+        setTranscript('');
+        setRealtimeFeedback([]);
+        setError(null);
+        geminiSegmentsRef.current = [];
+        azureSegmentsRef.current = [];
+        combinedTranscriptRef.current = [];
+        audioChunksRef.current = [];
+        speakerNamesRef.current.clear();
+        recordingStartTimeRef.current = Date.now();
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+            // Start MediaRecorder for full audio capture
+            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            mediaRecorderRef.current = mediaRecorder;
+
+            mediaRecorder.ondataavailable = async (event) => {
+                if (event.data.size > 0) {
+                    audioChunksRef.current.push(event.data);
+                }
+            };
+
+            // Collect chunks every 5 seconds
+            mediaRecorder.start(5000);
+
+            // Start both services
+            await Promise.all([
+                startGeminiLiveSession(),
+                startAzureDiarization()
+            ]);
+
+        } catch (error) {
+            console.error('Failed to start recording:', error);
+            setError('Could not access microphone');
+            setRecordingState(RecordingState.IDLE);
+        }
     };
+
+    const stopRecording = useCallback(async () => {
+        if (azureTranscriberRef.current) {
+            await azureTranscriberRef.current.stopTranscribingAsync();
+        }
+        
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.stop();
+        }
+        
+        setRecordingState(RecordingState.ANALYZING);
+        
+        // Wait a bit for final segments
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Final merge
+        mergeSegments();
+        
+        // Now analyze with Gemini Pro (full audio)
+        await analyzeFullRecording();
+    }, [mergeSegments, analyzeFullRecording]);
 
     const reset = () => {
         cleanup();
