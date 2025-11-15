@@ -45,27 +45,28 @@ export const useSalesCoach = () => {
 
     // Refs for tracking
     const azureTranscriberRef = useRef<any | null>(null);
-    const geminiSessionRef = useRef<any | null>(null);
+    const geminiModelRef = useRef<any | null>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const recordingStartTimeRef = useRef<number>(0);
     const speakerNamesRef = useRef<Map<string, string>>(new Map());
+    const isManuallyStopping = useRef(false);
     
     // Storage for segments
     const geminiSegmentsRef = useRef<LiveSegment[]>([]);
     const azureSegmentsRef = useRef<AzureSpeakerSegment[]>([]);
     const combinedTranscriptRef = useRef<CombinedSegment[]>([]);
 
-    // Load Azure SDK
+    // Load Azure SDK - FIXED: Check for SpeechSDK global
     useEffect(() => {
-        if ((window as any).Microsoft?.CognitiveServices?.Speech) {
+        if ((window as any).SpeechSDK) {
             setIsSDKLoading(false);
             return;
         }
 
         if (document.getElementById(SCRIPT_ID)) {
             const interval = setInterval(() => {
-                if ((window as any).Microsoft?.CognitiveServices?.Speech) {
+                if ((window as any).SpeechSDK) {
                     setIsSDKLoading(false);
                     clearInterval(interval);
                 }
@@ -77,9 +78,17 @@ export const useSalesCoach = () => {
         script.id = SCRIPT_ID;
         script.src = SDK_URL;
         script.async = true;
-        script.onload = () => setIsSDKLoading(false);
+        script.onload = () => {
+            console.log("Azure Speech SDK loaded.");
+            if ((window as any).SpeechSDK) {
+                setIsSDKLoading(false);
+            } else {
+                setError("Azure Speech SDK loaded but global SpeechSDK not found.");
+                setIsSDKLoading(false);
+            }
+        };
         script.onerror = () => {
-            setError("Azure Speech SDK failed to load");
+            setError("Azure Speech SDK failed to load. Check your internet connection, disable ad-blockers, and refresh the page.");
             setIsSDKLoading(false);
         };
         document.body.appendChild(script);
@@ -90,10 +99,7 @@ export const useSalesCoach = () => {
             azureTranscriberRef.current.close();
             azureTranscriberRef.current = null;
         }
-        if (geminiSessionRef.current) {
-            geminiSessionRef.current.close?.();
-            geminiSessionRef.current = null;
-        }
+        geminiModelRef.current = null;
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
             mediaRecorderRef.current.stop();
         }
@@ -141,10 +147,10 @@ export const useSalesCoach = () => {
 
     // Analyze text from Azure transcription with Gemini
     const analyzeTextWithGemini = useCallback(async (text: string, timestamp: number) => {
-        if (!geminiSessionRef.current || !text || text.trim().length < 5) return;
+        if (!geminiModelRef.current || !text || text.trim().length < 5) return;
 
         try {
-            const model = geminiSessionRef.current;
+            const model = geminiModelRef.current;
             
             // Analyze the transcript text
             const analysisResult = await model.generateContent([
@@ -193,25 +199,26 @@ Text: "${text}"`
         }
     }, [mergeSegments]);
 
-    // Start Gemini Live Audio Session
-    const startGeminiLiveSession = async () => {
+    // Initialize Gemini model
+    const initializeGeminiModel = useCallback(() => {
         try {
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-            
-            geminiSessionRef.current = model;
-            
-            console.log('Gemini session ready');
+            geminiModelRef.current = model;
+            console.log('Gemini model initialized');
         } catch (error) {
-            console.error('Gemini Live session error:', error);
-            setError('Failed to start Gemini analysis');
+            console.error('Gemini initialization error:', error);
+            setError('Failed to initialize Gemini analysis');
         }
-    };
+    }, []);
 
-    // Start Azure Speaker Diarization
+    // Start Azure Speaker Diarization - FIXED: Use SpeechSDK global
     const startAzureDiarization = useCallback(async () => {
-        const sdk = (window as any).Microsoft?.CognitiveServices?.Speech;
-        if (!sdk) return;
+        const sdk = (window as any).SpeechSDK;
+        if (!sdk) {
+            setError("Azure Speech SDK not loaded yet.");
+            return;
+        }
 
         try {
             const speechConfig = sdk.SpeechConfig.fromSubscription(AZURE_KEY, AZURE_REGION);
@@ -247,21 +254,28 @@ Text: "${text}"`
 
             transcriber.sessionStopped = () => {
                 console.log("Azure session stopped");
+                if (!isManuallyStopping.current) {
+                    stopRecording();
+                }
             };
 
             transcriber.canceled = (_s: any, e: any) => {
-                console.error(`Azure canceled: ${e.reason}`);
+                console.error(`Azure canceled: Reason=${e.reason}`);
                 if (e.reason === sdk.CancellationReason.Error) {
-                    setError(`Azure error: ${e.errorDetails}`);
+                    console.error(`Azure ErrorCode=${e.errorCode}`);
+                    console.error(`Azure ErrorDetails=${e.errorDetails}`);
+                    setError(`Speech recognition error: ${e.errorDetails}. Please check your Azure credentials.`);
                 }
+                cleanup();
+                setRecordingState(RecordingState.IDLE);
             };
 
             await transcriber.startTranscribingAsync();
         } catch (error) {
             console.error('Azure diarization error:', error);
-            setError('Failed to start speaker identification');
+            setError('Failed to start speaker identification. Please check your Azure credentials.');
         }
-    }, [analyzeTextWithGemini, mergeSegments, getSpeakerName]);
+    }, [analyzeTextWithGemini, mergeSegments, getSpeakerName, cleanup]);
 
     const formatTime = (seconds: number): string => {
         const mins = Math.floor(seconds / 60);
@@ -326,7 +340,6 @@ Text: "${text}"`
     };
 
     const generateCoachingCards = (analysis: string): string[] => {
-        // Parse Gemini analysis to extract strengths and opportunities
         const cards: string[] = [];
         
         if (analysis.includes('strength') || analysis.includes('well')) {
@@ -402,13 +415,12 @@ Text: "${text}"`
         }
     };
 
-    // Analyze complete recording with Gemini Pro
+    // Analyze complete recording with Gemini
     const analyzeFullRecording = useCallback(async () => {
         try {
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
             const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
             
-            // Use the combined transcript from Azure
             const fullTranscript = combinedTranscriptRef.current
                 .map(seg => `[${seg.speaker}] ${seg.text}`)
                 .join('\n');
@@ -420,7 +432,6 @@ Text: "${text}"`
             }
             
             try {
-                // Analyze the full transcript
                 const analysisResult = await model.generateContent([
                     `Analyze this complete sales conversation transcript and provide:
 1. Overall sentiment analysis
@@ -447,14 +458,16 @@ ${fullTranscript}`
 
         } catch (error) {
             console.error('Full analysis error:', error);
-            // Still try to save what we have
             await saveToFirebase('Recording completed with partial data.');
         }
     }, []);
 
     const startRecording = async () => {
-        if (isSDKLoading) return;
+        if (isSDKLoading) {
+            return;
+        }
 
+        isManuallyStopping.current = false;
         setRecordingState(RecordingState.RECORDING);
         setTranscript('');
         setRealtimeFeedback([]);
@@ -467,6 +480,7 @@ ${fullTranscript}`
         recordingStartTimeRef.current = Date.now();
 
         try {
+            // Check microphone permission first
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
             // Start MediaRecorder for full audio capture
@@ -482,20 +496,24 @@ ${fullTranscript}`
             // Collect chunks every 5 seconds
             mediaRecorder.start(5000);
 
-            // Start both services
-            await Promise.all([
-                startGeminiLiveSession(),
-                startAzureDiarization()
-            ]);
+            // Initialize Gemini and start Azure
+            initializeGeminiModel();
+            await startAzureDiarization();
 
         } catch (error) {
             console.error('Failed to start recording:', error);
-            setError('Could not access microphone');
+            if (error instanceof DOMException && error.name === 'NotAllowedError') {
+                setError('Microphone access was denied. Please enable microphone permissions in your browser settings and try again.');
+            } else {
+                setError('Could not access microphone or initialize services. Please check your internet connection and Azure credentials.');
+            }
             setRecordingState(RecordingState.IDLE);
         }
     };
 
     const stopRecording = useCallback(async () => {
+        isManuallyStopping.current = true;
+        
         if (azureTranscriberRef.current) {
             await azureTranscriberRef.current.stopTranscribingAsync();
         }
@@ -512,7 +530,7 @@ ${fullTranscript}`
         // Final merge
         mergeSegments();
         
-        // Now analyze with Gemini Pro (full audio)
+        // Now analyze with Gemini
         await analyzeFullRecording();
     }, [mergeSegments, analyzeFullRecording]);
 
@@ -527,6 +545,7 @@ ${fullTranscript}`
         combinedTranscriptRef.current = [];
         audioChunksRef.current = [];
         speakerNamesRef.current.clear();
+        isManuallyStopping.current = false;
     };
 
     useEffect(() => {
