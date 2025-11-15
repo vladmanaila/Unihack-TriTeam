@@ -6,9 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Mic } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup, getAdditionalUserInfo } from "firebase/auth";
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signInWithPopup } from "firebase/auth";
 import { auth, googleProvider, microsoftProvider } from "../firebaseConfig";
-import { doc, setDoc, serverTimestamp, collection, addDoc, getDoc } from "firebase/firestore";
+import { doc, setDoc, serverTimestamp, getDoc } from "firebase/firestore";
 import { db } from "../firebaseConfig";
 
 const Login = () => {
@@ -16,7 +16,6 @@ const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState("login");
   
-  // Form states
   const [loginForm, setLoginForm] = useState({
     email: "",
     password: ""
@@ -28,91 +27,36 @@ const Login = () => {
     password: ""
   });
 
-  // Function to create/update user in Firestore
-  // Function to create/update user in Firestore
-const createOrUpdateUser = async (user: any, userName?: string) => {
-  const userRef = doc(db, "users", user.uid);
-  
-  // Use the provided username or get from social provider
-  let finalName = "User";
-  if (userName) {
-    finalName = userName;
-  } else if (user.displayName) {
-    finalName = user.displayName;
-  } else if (user.email) {
-    // Use email username as fallback
-    finalName = user.email.split('@')[0];
-  }
-
-  const userData = {
-    name: finalName,
-    email: user.email,
-    date: serverTimestamp(),
-    subPlan: "free",
-    lastActiveDate: serverTimestamp(),
-    generalStats: {
-      avgSentimentScore: "0",
-      totalEnPer: "0", // Total Engagement Percentage
-      totalRecordings: "0",
-      totalStrengths: "0",
-      totalOpportunities: "0"
+  // Create/update user in Firestore - FĂRĂ sample recording
+  const createOrUpdateUser = async (user: any, userName?: string) => {
+    const userRef = doc(db, "users", user.uid);
+    
+    let finalName = "User";
+    if (userName) {
+      finalName = userName;
+    } else if (user.displayName) {
+      finalName = user.displayName;
+    } else if (user.email) {
+      finalName = user.email.split('@')[0];
     }
+
+    const userData = {
+      name: finalName,
+      email: user.email,
+      date: serverTimestamp(),
+      subPlan: "free",
+      lastActiveDate: serverTimestamp(),
+      generalStats: {
+        avgSentimentScore: "0",
+        totalEnPer: "0",
+        totalRecordings: "0",
+        totalStrengths: "0",
+        totalOpportunities: "0"
+      }
+    };
+
+    await setDoc(userRef, userData, { merge: true });
   };
-
-  await setDoc(userRef, userData, { merge: true });
-};
-
-  // Function to check if user document already exists
-  const checkIfUserExists = async (userId: string) => {
-    const userDoc = await getDoc(doc(db, "users", userId));
-    return userDoc.exists();
-  };
-
-  // Function to create a sample recording for new users
-  // Function to create a sample recording for new users
-const createSampleRecording = async (userId: string, userName: string = "User") => {
-  const recordingsRef = collection(db, "recordings");
-  
-  const sampleRecording = {
-    audioFileUrl: "",
-    coachingCard: [
-      "STRENGTH: Excellent introduction and rapport building",
-      "STRENGTH: Clear value proposition presentation", 
-      "OPPORTUNITY: Could ask more discovery questions",
-      "OPPORTUNITY: Follow up on pricing discussion needed"
-    ],
-    date: serverTimestamp(),
-    sentimentGraph: JSON.stringify([
-      { time: "0:00", sentiment: 65 },
-      { time: "5:00", sentiment: 72 },
-      { time: "10:00", sentiment: 78 },
-      { time: "15:00", sentiment: 75 },
-      { time: "20:00", sentiment: 82 },
-      { time: "25:00", sentiment: 85 },
-      { time: "30:00", sentiment: 80 }
-    ]),
-    title: `${userName}'s First Sales Call`,
-    transcript: [
-      "Hello, thank you for taking the time to speak with me today.",
-      "Hi, I'm interested in learning more about your product.",
-      "Great! We help businesses like yours increase efficiency by automating routine tasks.",
-      "That sounds interesting. Can you tell me more about the key features?",
-      "Certainly! Our platform offers real-time analytics, automated reporting, and custom dashboard creation.",
-      "How does the pricing work for your solution?",
-      "We offer flexible pricing based on your team size and specific needs. Let me walk you through the options."
-    ],
-    recordingStats: {
-      engagementPercentage: "78",
-      missedOpportunitiesCount: "2", 
-      sentimentScoreAvg: "75",
-      strengthsCount: "2"
-    },
-    userId: userId,
-    duration: "35:00" // Add duration field
-  };
-
-  await addDoc(recordingsRef, sampleRecording);
-};
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -122,7 +66,6 @@ const createSampleRecording = async (userId: string, userName: string = "User") 
       const userCredential = await signInWithEmailAndPassword(auth, loginForm.email, loginForm.password);
       const user = userCredential.user;
       
-      // Update user's last active date
       await createOrUpdateUser(user);
       navigate("/dashboard");
     } catch (error) {
@@ -134,89 +77,64 @@ const createSampleRecording = async (userId: string, userName: string = "User") 
   };
 
   const handleSignup = async (e: React.FormEvent) => {
-  e.preventDefault();
-  setIsLoading(true);
+    e.preventDefault();
+    setIsLoading(true);
 
-  try {
-    const userCredential = await createUserWithEmailAndPassword(auth, signupForm.email, signupForm.password);
-    const user = userCredential.user;
-    
-    // Create user document with name from signup form
-    await createOrUpdateUser(user, signupForm.name);
-    
-    // Create a sample recording for the new user with their actual name
-    await createSampleRecording(user.uid, signupForm.name);
-    
-    // After successful signup, switch to login tab and show success message
-    setActiveTab("login");
-    setLoginForm(prev => ({ ...prev, email: signupForm.email }));
-    setSignupForm({ name: "", email: "", password: "" });
-    alert("Account created successfully! Please login.");
-  } catch (error: any) {
-    console.error(error);
-    if (error.code === 'auth/email-already-in-use') {
-      alert("This email is already registered. Please login instead.");
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, signupForm.email, signupForm.password);
+      const user = userCredential.user;
+      
+      await createOrUpdateUser(user, signupForm.name);
+      
       setActiveTab("login");
       setLoginForm(prev => ({ ...prev, email: signupForm.email }));
-    } else {
-      alert("Signup failed: " + error.message);
+      setSignupForm({ name: "", email: "", password: "" });
+      alert("Account created successfully! Please login.");
+    } catch (error: any) {
+      console.error(error);
+      if (error.code === 'auth/email-already-in-use') {
+        alert("This email is already registered. Please login instead.");
+        setActiveTab("login");
+        setLoginForm(prev => ({ ...prev, email: signupForm.email }));
+      } else {
+        alert("Signup failed: " + error.message);
+      }
+    } finally {
+      setIsLoading(false);
     }
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
   const handleGoogleLogin = async () => {
-  try {
-    setIsLoading(true);
-    const userCredential = await signInWithPopup(auth, googleProvider);
-    const user = userCredential.user;
-    
-    // Check if this is a new user by looking at the user's metadata
-    const isNewUser = user.metadata.creationTime === user.metadata.lastSignInTime;
-    
-    // Create/update user document
-    await createOrUpdateUser(user);
-    
-    // If it's a new user, create sample recording
-    if (isNewUser) {
-      await createSampleRecording(user.uid, user.displayName || "User");
+    try {
+      setIsLoading(true);
+      const userCredential = await signInWithPopup(auth, googleProvider);
+      const user = userCredential.user;
+      
+      await createOrUpdateUser(user);
+      navigate("/dashboard");
+    } catch (error) {
+      console.error(error);
+      alert("Google login failed");
+    } finally {
+      setIsLoading(false);
     }
-    
-    navigate("/dashboard");
-  } catch (error) {
-    console.error(error);
-    alert("Google login failed");
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
-const handleMicrosoftLogin = async () => {
-  try {
-    setIsLoading(true);
-    const userCredential = await signInWithPopup(auth, microsoftProvider);
-    const user = userCredential.user;
-    
-    // Check if this is a new user by looking at the user's metadata
-    const isNewUser = user.metadata.creationTime === user.metadata.lastSignInTime;
-    
-    // Create/update user document
-    await createOrUpdateUser(user);
-    
-    // If it's a new user, create sample recording
-    if (isNewUser) {
-      await createSampleRecording(user.uid, user.displayName || "User");
+  const handleMicrosoftLogin = async () => {
+    try {
+      setIsLoading(true);
+      const userCredential = await signInWithPopup(auth, microsoftProvider);
+      const user = userCredential.user;
+      
+      await createOrUpdateUser(user);
+      navigate("/dashboard");
+    } catch (error) {
+      console.error(error);
+      alert("Microsoft login failed");
+    } finally {
+      setIsLoading(false);
     }
-    
-    navigate("/dashboard");
-  } catch (error) {
-    console.error(error);
-    alert("Microsoft login failed");
-  } finally {
-    setIsLoading(false);
-  }
-};
+  };
 
   const updateLoginForm = (field: string, value: string) => {
     setLoginForm(prev => ({ ...prev, [field]: value }));

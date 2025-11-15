@@ -18,29 +18,17 @@ interface TranscriptSegment {
 
 export const useFileUploadSalesCoach = () => {
     const [recordingState, setRecordingState] = useState<RecordingState>(RecordingState.IDLE);
-    const [transcript, setTranscript] = useState<string>('');
-    const [realtimeFeedback, setRealtimeFeedback] = useState<string[]>([]);
     const [error, setError] = useState<string | null>(null);
-    const [currentSpeaker, setCurrentSpeaker] = useState<string>('');
     const [uploadProgress, setUploadProgress] = useState<number>(0);
+    const [currentFile, setCurrentFile] = useState<File | null>(null);
 
-    const uploadedFileRef = useRef<File | null>(null);
     const transcriptSegmentsRef = useRef<TranscriptSegment[]>([]);
     const speakerNamesRef = useRef<Map<string, string>>(new Map());
 
     const cleanup = useCallback(() => {
-        uploadedFileRef.current = null;
-    }, []);
-
-    const getSpeakerName = useCallback((speakerId: string): string => {
-        if (speakerNamesRef.current.has(speakerId)) {
-            return speakerNamesRef.current.get(speakerId)!;
-        }
-        
-        const count = speakerNamesRef.current.size;
-        const name = `Speaker ${String.fromCharCode(65 + count)}`; // A, B, C...
-        speakerNamesRef.current.set(speakerId, name);
-        return name;
+        setCurrentFile(null);
+        transcriptSegmentsRef.current = [];
+        speakerNamesRef.current.clear();
     }, []);
 
     // Convert audio file to base64 for Gemini
@@ -64,11 +52,11 @@ export const useFileUploadSalesCoach = () => {
         if (type.includes('m4a') || type.includes('mp4')) return 'audio/mp4';
         if (type.includes('ogg')) return 'audio/ogg';
         if (type.includes('webm')) return 'audio/webm';
-        return 'audio/mpeg'; // default
+        return 'audio/mpeg';
     };
 
-    // Process audio file with Gemini
-    const processAudioFile = useCallback(async (audioFile: File) => {
+    // SINGLE API CALL - Procesează totul într-un singur apel
+    const processAudioWithSingleCall = useCallback(async (audioFile: File) => {
         try {
             setUploadProgress(10);
 
@@ -76,142 +64,96 @@ export const useFileUploadSalesCoach = () => {
             const base64Audio = await audioFileToBase64(audioFile);
             const mimeType = getGeminiMimeType(audioFile);
 
-            setUploadProgress(20);
+            setUploadProgress(30);
 
             // Initialize Gemini
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            const model = genAI.getGenerativeModel({ 
+                model: 'gemini-2.0-flash-exp',
+                generationConfig: {
+                    temperature: 0.1,
+                    maxOutputTokens: 4000,
+                }
+            });
 
-            setUploadProgress(30);
+            setUploadProgress(50);
 
-            // Step 1: Get full transcription with speaker diarization
-            console.log('Starting transcription...');
-            const transcriptionResult = await model.generateContent([
+            // SINGLE COMPREHENSIVE PROMPT - generează toate datele într-un singur răspuns
+            console.log('Starting comprehensive analysis...');
+            const analysisResult = await model.generateContent([
                 {
                     inlineData: {
                         data: base64Audio,
                         mimeType: mimeType
                     }
                 },
-                `Transcribe this audio file with speaker diarization. 
+                `Analyze this sales conversation audio and provide a COMPLETE analysis in a SINGLE JSON response.
 
-For each segment, identify:
-1. The speaker (use Speaker A, Speaker B, etc.)
-2. The text spoken
-3. Approximate timestamp in seconds
+REQUIRED OUTPUT FORMAT (ONLY JSON, no markdown):
+{
+  "transcription": [
+    {"speaker": "Speaker A", "text": "exact text", "start": 0.0, "end": 5.2, "emotion": "calm", "sentiment": "positive"},
+    {"speaker": "Speaker B", "text": "exact text", "start": 5.2, "end": 12.8, "emotion": "engaged", "sentiment": "neutral"}
+  ],
+  "overallAnalysis": "Comprehensive summary of the conversation",
+  "strengths": ["Strength 1 with example", "Strength 2 with example", "Strength 3 with example"],
+  "opportunities": ["Opportunity 1 with example", "Opportunity 2 with example", "Opportunity 3 with example"],
+  "competitors": ["Competitor A", "Competitor B"],
+  "keywords": {"pricing": 5, "demo": 3, "features": 7},
+  "questions": ["Question 1?", "Question 2?", "Question 3?"],
+  "coachingTips": ["Tip 1", "Tip 2", "Tip 3"],
+  "metrics": {
+    "talkToListenRatio": "60:40",
+    "sentimentScoreAvg": "75",
+    "engagementPercentage": "80",
+    "questionCount": "5",
+    "strengthsCount": "3",
+    "missedOpportunitiesCount": "2",
+    "fillerWordsCount": "8"
+  }
+}
 
-Format your response as a JSON array (no markdown, no code blocks):
-[
-  {"speaker": "Speaker A", "text": "...", "start": 0, "end": 5},
-  {"speaker": "Speaker B", "text": "...", "start": 5, "end": 10}
-]
+ANALYSIS REQUIREMENTS:
+1. TRANSCRIPTION: Complete transcript with speaker diarization, timestamps, emotions, and sentiments
+2. STRENGTHS: 3-5 specific things done well with concrete examples
+3. OPPORTUNITIES: 3-5 specific areas for improvement with examples
+4. COMPETITORS: Any competitor companies mentioned
+5. KEYWORDS: Important business keywords with frequency counts
+6. QUESTIONS: All questions asked during the call
+7. COACHING TIPS: 3-5 actionable coaching recommendations
+8. METRICS: Calculate realistic metrics based on conversation analysis
 
-Provide the complete transcription.`
+Be specific and use actual examples from the conversation.`
             ]);
 
-            setUploadProgress(50);
+            setUploadProgress(80);
 
-            let transcriptionText = transcriptionResult.response.text();
-            transcriptionText = transcriptionText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-            console.log('Raw transcription response:', transcriptionText);
-
-            let segments: TranscriptSegment[] = [];
+            let analysisText = analysisResult.response.text();
+            analysisText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
 
             try {
-                segments = JSON.parse(transcriptionText);
+                const parsedData = JSON.parse(analysisText);
+                
+                // Set transcript segments
+                transcriptSegmentsRef.current = parsedData.transcription || [];
+                
+                // Save to Firebase with ALL data
+                await saveCompleteAnalysisToFirebase(audioFile, parsedData);
+                
             } catch (parseError) {
-                console.error('Failed to parse transcription JSON:', parseError);
-                
-                // Fallback: Extract text segments manually
-                const lines = transcriptionText.split('\n').filter(line => line.trim());
-                let currentTime = 0;
-                
-                segments = lines.map((line, idx) => {
-                    const speakerMatch = line.match(/\[(Speaker [A-Z])\]/);
-                    const speaker = speakerMatch ? speakerMatch[1] : `Speaker ${String.fromCharCode(65 + (idx % 2))}`;
-                    const text = line.replace(/\[Speaker [A-Z]\]/g, '').trim();
-                    
-                    const segment = {
-                        speaker,
-                        text,
-                        start: currentTime,
-                        end: currentTime + 5
-                    };
-                    
-                    currentTime += 5;
-                    return segment;
-                }).filter(seg => seg.text.length > 0);
+                console.error('Failed to parse comprehensive analysis:', parseError);
+                throw new Error('Failed to parse AI analysis response');
             }
-
-            setUploadProgress(60);
-
-            // Step 2: Analyze each segment for emotion and sentiment
-            console.log('Analyzing segments...');
-            const analyzedSegments: TranscriptSegment[] = [];
-
-            for (let i = 0; i < segments.length; i++) {
-                const segment = segments[i];
-                setCurrentSpeaker(segment.speaker);
-
-                try {
-                    const analysisResult = await model.generateContent([
-                        `Analyze this sales conversation segment and provide ONLY a JSON object (no markdown):
-{"emotion":"joy/calm/nervousness/anger/neutral","sentiment":"positive/neutral/negative","feedback":"brief coaching tip"}
-
-Text: "${segment.text}"`
-                    ]);
-
-                    let analysisText = analysisResult.response.text();
-                    analysisText = analysisText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-
-                    try {
-                        const parsed = JSON.parse(analysisText);
-                        
-                        analyzedSegments.push({
-                            ...segment,
-                            emotion: parsed.emotion,
-                            sentiment: parsed.sentiment
-                        });
-
-                        if (parsed.feedback) {
-                            setRealtimeFeedback(prev => [parsed.feedback, ...prev].slice(0, 5));
-                        }
-                    } catch (e) {
-                        // Add without analysis if parsing fails
-                        analyzedSegments.push(segment);
-                    }
-                } catch (apiError) {
-                    console.error('Segment analysis error:', apiError);
-                    analyzedSegments.push(segment);
-                }
-
-                // Update progress
-                const progress = 60 + (i / segments.length) * 30;
-                setUploadProgress(Math.round(progress));
-            }
-
-            transcriptSegmentsRef.current = analyzedSegments;
-
-            // Update display transcript
-            const displayText = analyzedSegments
-                .map(seg => `[${seg.speaker}] ${seg.text} ${seg.emotion ? `(${seg.emotion})` : ''}`)
-                .join('\n');
-            setTranscript(displayText);
-
-            setUploadProgress(95);
-
-            // Step 3: Full analysis
-            await analyzeFullRecording();
 
         } catch (err) {
-            console.error("Audio processing error:", err);
-            setError(`Failed to process audio file: ${err instanceof Error ? err.message : 'Unknown error'}`);
+            console.error("Comprehensive analysis error:", err);
+            setError(`Failed to analyze audio: ${err instanceof Error ? err.message : 'Unknown error'}`);
             setRecordingState(RecordingState.IDLE);
             setUploadProgress(0);
         }
     }, []);
 
+    // === FORMAT TIME HELPERS ===
     const formatTime = (seconds: number): string => {
         const mins = Math.floor(seconds / 60);
         const secs = Math.floor(seconds % 60);
@@ -224,185 +166,117 @@ Text: "${segment.text}"`
         return formatTime(last.end);
     };
 
-    const calculateMetrics = () => {
-        const speakerTime = new Map<string, number>();
-        let questionCount = 0;
-        let totalSentimentScore = 0;
-        let sentimentCount = 0;
-
-        transcriptSegmentsRef.current.forEach(seg => {
-            speakerTime.set(
-                seg.speaker,
-                (speakerTime.get(seg.speaker) || 0) + (seg.end - seg.start)
-            );
-
-            if (seg.text.includes('?')) questionCount++;
-
-            if (seg.sentiment === 'positive') {
-                totalSentimentScore += 80;
-                sentimentCount++;
-            } else if (seg.sentiment === 'neutral') {
-                totalSentimentScore += 60;
-                sentimentCount++;
-            } else if (seg.sentiment === 'negative') {
-                totalSentimentScore += 40;
-                sentimentCount++;
-            }
-        });
-
-        const speakers = Array.from(speakerTime.entries());
-        const totalTime = Array.from(speakerTime.values()).reduce((a, b) => a + b, 0);
-        
-        let talkRatio = "N/A";
-        if (speakers.length >= 2) {
-            const ratio1 = Math.round((speakers[0][1] / totalTime) * 100);
-            const ratio2 = Math.round((speakers[1][1] / totalTime) * 100);
-            talkRatio = `${ratio1}:${ratio2}`;
-        }
-
-        return {
-            talkToListenRatio: talkRatio,
-            questionCount: String(questionCount),
-            sentimentScoreAvg: String(Math.round(totalSentimentScore / sentimentCount) || 0),
-            engagementPercentage: "75",
-            strengthsCount: "3",
-            missedOpportunitiesCount: "2",
-            fillerWordsCount: "0",
-            keywordsDetected: JSON.stringify({}),
-            competitorMentions: JSON.stringify({}),
-            objectionsDetected: JSON.stringify([])
-        };
-    };
-
-    const generateCoachingCards = (analysis: string): string[] => {
-        const cards: string[] = [];
-        
-        if (analysis.includes('strength') || analysis.includes('well')) {
-            const strengthMatch = analysis.match(/strength[s]?:(.+?)(?=improvement|$)/is);
-            if (strengthMatch) {
-                cards.push(`STRENGTH: ${strengthMatch[1].trim().substring(0, 100)}`);
-            }
-        }
-
-        if (analysis.includes('improvement') || analysis.includes('opportunity')) {
-            const opportunityMatch = analysis.match(/improvement[s]?:(.+?)(?=recommendation|$)/is);
-            if (opportunityMatch) {
-                cards.push(`OPPORTUNITY: ${opportunityMatch[1].trim().substring(0, 100)}`);
-            }
-        }
-
-        return cards.length > 0 ? cards : ['STRENGTH: Call completed successfully'];
-    };
-
-    const generateSentimentGraph = () => {
+    // === SENTIMENT GRAPH ===
+    const generateSentimentGraph = (segments: TranscriptSegment[]) => {
         const points = [];
-        for (let i = 0; i < transcriptSegmentsRef.current.length; i += 3) {
-            const seg = transcriptSegmentsRef.current[i];
-            if (seg) {
-                const score = seg.sentiment === 'positive' ? 80 : seg.sentiment === 'neutral' ? 60 : 40;
-                points.push({
-                    time: formatTime(seg.start),
-                    sentiment: score
-                });
+        let cumulativeSentiment = 0;
+        let segmentCount = 0;
+
+        points.push({ time: "0:00", sentiment: 50 });
+
+        for (let i = 0; i < segments.length; i++) {
+            const seg = segments[i];
+            
+            if (seg.sentiment) {
+                const score = seg.sentiment === 'positive' ? 80 : 
+                             seg.sentiment === 'neutral' ? 60 : 40;
+                
+                cumulativeSentiment += score;
+                segmentCount++;
+
+                if (i % 2 === 0 || points.length === 1) {
+                    const currentAvg = Math.round(cumulativeSentiment / segmentCount);
+                    const lastPoint = points[points.length - 1];
+                    
+                    if (points.length === 1 || Math.abs(currentAvg - lastPoint.sentiment) > 10) {
+                        points.push({
+                            time: formatTime(seg.start),
+                            sentiment: currentAvg
+                        });
+                    }
+                }
             }
         }
+
         return points;
     };
 
-    const saveToFirebase = async (geminiAnalysis: string) => {
-        try {
-            const user = auth.currentUser;
-            if (!user) throw new Error("Not authenticated");
-            if (!uploadedFileRef.current) throw new Error("No audio file found");
+    // === SAVE COMPLETE ANALYSIS TO FIREBASE ===
+    // === SAVE COMPLETE ANALYSIS TO FIREBASE ===
+const saveCompleteAnalysisToFirebase = async (audioFile: File, analysisData: any) => {
+    try {
+        const user = auth.currentUser;
+        if (!user) throw new Error("Not authenticated");
 
-            setUploadProgress(98);
+        setUploadProgress(90);
 
-            // Upload audio file to Firebase Storage
-            const timestamp = Date.now();
-            const storageRef = ref(storage, `recordings/${user.uid}/${timestamp}_${uploadedFileRef.current.name}`);
-            await uploadBytes(storageRef, uploadedFileRef.current);
-            const audioUrl = await getDownloadURL(storageRef);
+        // Upload audio file
+        const timestamp = Date.now();
+        const storageRef = ref(storage, `recordings/${user.uid}/${timestamp}_${audioFile.name}`);
+        await uploadBytes(storageRef, audioFile);
+        const audioUrl = await getDownloadURL(storageRef);
 
-            // Calculate metrics
-            const metrics = calculateMetrics();
-            const coachingCards = generateCoachingCards(geminiAnalysis);
+        // Format title
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 
-            // Save to Firestore
-            await addDoc(collection(db, "recordings"), {
-                title: `Sales Call - ${new Date().toLocaleDateString()} (Uploaded)`,
-                audioFileUrl: audioUrl,
-                transcript: transcriptSegmentsRef.current.map(s => `[${s.speaker}] ${s.text}`),
-                transcriptSegments: JSON.stringify(transcriptSegmentsRef.current),
-                sentimentGraph: JSON.stringify(generateSentimentGraph()),
-                coachingCard: coachingCards,
-                geminiFullAnalysis: geminiAnalysis,
-                recordingStats: metrics,
-                speakers: JSON.stringify(Array.from(speakerNamesRef.current.entries())),
-                userId: user.uid,
-                date: serverTimestamp(),
-                duration: formatDuration(),
-                uploadedFileName: uploadedFileRef.current.name
-            });
+        // Generate coaching cards from strengths and opportunities - FIXED LENGTH
+       const coachingCards = [
+    ...(analysisData.strengths || []).slice(0, 3).map((s: string) => `STRENGTH: ${s}`),
+    ...(analysisData.opportunities || []).slice(0, 3).map((o: string) => `OPPORTUNITY: ${o}`)
+];
 
-            setUploadProgress(100);
-            setRecordingState(RecordingState.DONE);
-            alert('Recording analyzed and saved successfully!');
+        const truncateLongText = (text: string, maxLength: number = 500): string => {
+    if (text.length <= maxLength) return text;
+    return text.substring(0, maxLength - 3) + '...';
+};
 
-        } catch (error) {
-            console.error('Save error:', error);
-            setError('Failed to save recording');
-            setUploadProgress(0);
-        }
-    };
 
-    // Analyze complete recording with Gemini
-    const analyzeFullRecording = useCallback(async () => {
-        try {
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-            
-            const fullTranscript = transcriptSegmentsRef.current
-                .map(seg => `[${seg.speaker}] ${seg.text}`)
-                .join('\n');
-            
-            if (!fullTranscript || fullTranscript.trim().length < 50) {
-                console.log('Transcript too short for full analysis, saving with basic data');
-                await saveToFirebase('Recording completed. Transcript was too short for detailed analysis.');
-                return;
-            }
-            
-            try {
-                const analysisResult = await model.generateContent([
-                    `Analyze this complete sales conversation transcript and provide:
-1. Overall sentiment analysis
-2. Key emotional patterns and shifts
-3. Communication strengths (what was done well)
-4. Areas for improvement (missed opportunities)
-5. Coaching recommendations
-6. Talk-to-listen ratio assessment
-7. Question quality evaluation
-8. Objection handling review
+        // Save COMPLETE data to Firestore
+        await addDoc(collection(db, "recordings"), {
+            title: `Sales Call - ${dateStr} at ${timeStr} (Uploaded)`,
+            audioFileUrl: audioUrl,
+            transcript: (analysisData.transcription || []).map((s: TranscriptSegment) => `[${s.speaker}] ${s.text}`),
+            transcriptSegments: JSON.stringify(analysisData.transcription || []),
+            sentimentGraph: JSON.stringify(generateSentimentGraph(analysisData.transcription || [])),
+            coachingCard: coachingCards.length > 0 ? coachingCards : ['STRENGTH: Call completed successfully'],
+            strengths: (analysisData.strengths || []).map(s => truncateLongText(s)),
+            opportunities: (analysisData.opportunities || []).map(o => truncateLongText(o)),
+            competitors: analysisData.competitors || [],
+            keywords: analysisData.keywords || {},
+            questions: analysisData.questions || [],
+            geminiFullAnalysis: analysisData.overallAnalysis || 'Analysis completed successfully',
+            recordingStats: analysisData.metrics || {
+                talkToListenRatio: "50:50",
+                sentimentScoreAvg: "50",
+                engagementPercentage: "50",
+                questionCount: "0",
+                strengthsCount: "0",
+                missedOpportunitiesCount: "0",
+                fillerWordsCount: "0",
+                keywordsDetected: JSON.stringify({}),
+                competitorMentions: JSON.stringify({}),
+                objectionsDetected: JSON.stringify([])
+            },
+            speakers: JSON.stringify(Array.from(speakerNamesRef.current.entries())),
+            userId: user.uid,
+            date: serverTimestamp(),
+            duration: formatDuration(),
+            uploadedFileName: audioFile.name
+        });
 
-Provide actionable insights for sales improvement.
+        setUploadProgress(100);
+        setRecordingState(RecordingState.DONE);
+        console.log('Recording analyzed and saved successfully with ALL data in single call!');
 
-Transcript:
-${fullTranscript}`
-                ]);
-
-                const analysisText = analysisResult.response.text();
-                await saveToFirebase(analysisText);
-            } catch (apiError) {
-                console.error('Gemini API error in full analysis:', apiError);
-                await saveToFirebase('Recording completed. Full transcript available for review.');
-            }
-
-        } catch (error) {
-            console.error('Full analysis error:', error);
-            await saveToFirebase('Recording completed with partial data.');
-        }
-    }, []);
-
-    // Main function to handle file upload
+    } catch (error) {
+        console.error('Save error:', error);
+        setError('Failed to save recording');
+        setUploadProgress(0);
+    }
+};
+    // Main function to handle file upload - SINGLE API CALL
     const uploadAndAnalyzeFile = async (file: File) => {
         // Validate file type
         const validTypes = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/m4a', 'audio/mp4', 'audio/ogg', 'audio/webm'];
@@ -412,24 +286,22 @@ ${fullTranscript}`
         }
 
         // Validate file size (max 100MB)
-        const maxSize = 100 * 1024 * 1024; // 100MB
+        const maxSize = 100 * 1024 * 1024;
         if (file.size > maxSize) {
             setError('File is too large. Maximum size is 100MB.');
             return;
         }
 
         setRecordingState(RecordingState.RECORDING);
-        setTranscript('');
-        setRealtimeFeedback([]);
         setError(null);
         setUploadProgress(0);
+        setCurrentFile(file);
         transcriptSegmentsRef.current = [];
         speakerNamesRef.current.clear();
-        uploadedFileRef.current = file;
 
         try {
-            // Process the audio file with Gemini
-            await processAudioFile(file);
+            // Process the audio file with SINGLE API CALL
+            await processAudioWithSingleCall(file);
 
         } catch (error) {
             console.error('Failed to analyze file:', error);
@@ -442,13 +314,8 @@ ${fullTranscript}`
     const reset = () => {
         cleanup();
         setRecordingState(RecordingState.IDLE);
-        setTranscript('');
-        setRealtimeFeedback([]);
         setError(null);
         setUploadProgress(0);
-        transcriptSegmentsRef.current = [];
-        speakerNamesRef.current.clear();
-        uploadedFileRef.current = null;
     };
 
     useEffect(() => {
@@ -457,13 +324,8 @@ ${fullTranscript}`
 
     return {
         recordingState,
-        transcript,
-        realtimeFeedback,
         error,
-        isSDKLoading: false, // No SDK needed anymore
-        currentSpeaker,
         uploadProgress,
-        combinedSegments: transcriptSegmentsRef.current,
         uploadAndAnalyzeFile,
         reset
     };

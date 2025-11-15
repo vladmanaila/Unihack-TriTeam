@@ -26,12 +26,15 @@ interface Recording {
     strengthsCount: string;
   };
   userId: string;
+  duration?: string;
 }
 
 const Dashboard = () => {
   const [recordings, setRecordings] = useState<Recording[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [showRecordingModal, setShowRecordingModal] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -45,9 +48,6 @@ const Dashboard = () => {
 
     return () => unsubscribe();
   }, []);
-  const [showRecordingModal, setShowRecordingModal] = useState(false);
-  const [showUploadModal, setShowUploadModal] = useState(false);
-
 
   const fetchUserRecordings = async (userId: string) => {
     try {
@@ -58,7 +58,6 @@ const Dashboard = () => {
         where("userId", "==", userId),
         orderBy("date", "desc")
       );
-      
       
       const querySnapshot = await getDocs(q);
       const userRecordings: Recording[] = [];
@@ -78,6 +77,33 @@ const Dashboard = () => {
     }
   };
 
+  // Convertește duration string (MM:SS) în minute
+  const parseDuration = (duration?: string): number => {
+    if (!duration) return 0;
+    const parts = duration.split(':');
+    if (parts.length === 2) {
+      const minutes = parseInt(parts[0]) || 0;
+      const seconds = parseInt(parts[1]) || 0;
+      return minutes + (seconds / 60);
+    }
+    return 0;
+  };
+
+  // Calculează total hours din toate recordingurile
+  const calculateTotalHours = (): string => {
+    const totalMinutes = recordings.reduce((sum, rec) => {
+      return sum + parseDuration(rec.duration);
+    }, 0);
+    
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = Math.round(totalMinutes % 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  };
+
   const getSentimentColor = (score: number) => {
     if (score >= 80) return "bg-secondary text-secondary-foreground";
     if (score >= 60) return "bg-primary text-primary-foreground";
@@ -92,14 +118,20 @@ const Dashboard = () => {
     });
   };
 
+  const formatTime = (timestamp: Timestamp) => {
+    return timestamp.toDate().toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
   // Calculate stats from recordings
   const totalRecordings = recordings.length;
   const avgSentiment = recordings.length > 0 
     ? Math.round(recordings.reduce((sum, rec) => sum + parseInt(rec.recordingStats.sentimentScoreAvg || "0"), 0) / recordings.length)
     : 0;
   
-  // Calculate total hours (you might want to add duration to your recording structure)
-  const totalHours = (recordings.length * 0.5).toFixed(1); // Mock calculation
+  const totalHours = calculateTotalHours();
 
   if (loading) {
     return (
@@ -125,26 +157,25 @@ const Dashboard = () => {
           <p className="text-white/90 mb-6">Ready to coach your next sales call?</p>
           
           <div className="flex flex-wrap gap-4">
-  <Button
-    variant="hero"
-    size="lg"
-    className="bg-white text-primary hover:bg-white/90"
-    onClick={() => setShowRecordingModal(true)}
-  >
-    <Mic className="mr-2" />
-    Record Call
-  </Button>
+            <Button
+              variant="hero"
+              size="lg"
+              className="bg-white text-primary hover:bg-white/90"
+              onClick={() => setShowRecordingModal(true)}
+            >
+              <Mic className="mr-2" />
+              Record Call
+            </Button>
 
-  <Button
-    variant="hero"
-    size="lg"
-    className="bg-white text-primary hover:bg-white/90"
-    onClick={() => setShowUploadModal(true)}
-  >
-    Upload Call
-  </Button>
-</div>
-
+            <Button
+              variant="hero"
+              size="lg"
+              className="bg-white text-primary hover:bg-white/90"
+              onClick={() => setShowUploadModal(true)}
+            >
+              Upload Call
+            </Button>
+          </div>
         </div>
 
         {/* Stats Overview */}
@@ -173,11 +204,11 @@ const Dashboard = () => {
           
           <Card className="shadow-card">
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Hours</CardTitle>
+              <CardTitle className="text-sm font-medium">Total Time</CardTitle>
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{totalHours}h</div>
+              <div className="text-2xl font-bold">{totalHours}</div>
               <p className="text-xs text-muted-foreground">Analyzed content</p>
             </CardContent>
           </Card>
@@ -197,7 +228,7 @@ const Dashboard = () => {
                 <p className="text-muted-foreground mb-4">
                   Start by recording your first sales call to see analytics here.
                 </p>
-                <Button>
+                <Button onClick={() => setShowRecordingModal(true)}>
                   <Mic className="mr-2" />
                   Record Your First Call
                 </Button>
@@ -213,10 +244,10 @@ const Dashboard = () => {
                         <CardTitle className="text-lg mb-1">{recording.title}</CardTitle>
                         <CardDescription className="flex items-center gap-4 text-sm">
                           <span>{formatDate(recording.date)}</span>
+                          <span>{formatTime(recording.date)}</span>
                           <span className="flex items-center gap-1">
                             <Clock className="h-3 w-3" />
-                            {/* Add duration field to your recording structure if needed */}
-                            N/A
+                            {recording.duration || "N/A"}
                           </span>
                         </CardDescription>
                       </div>
@@ -258,26 +289,26 @@ const Dashboard = () => {
           )}
         </div>
       </main>
-          {showRecordingModal && (
-    <RealtimeCallModal
-      onComplete={() => {
-        setShowRecordingModal(false);
-        if (user) fetchUserRecordings(user.uid);
-      }}
-      onCancel={() => setShowRecordingModal(false)}
-    />
-  )}
-  {showUploadModal && (
-  <FileUploadCallModal
-    onComplete={() => {
-      setShowUploadModal(false);
-      if (user) fetchUserRecordings(user.uid);
-    }}
-    onCancel={() => setShowUploadModal(false)}
-  />
-)}
-
-
+      
+      {showRecordingModal && (
+        <RealtimeCallModal
+          onComplete={() => {
+            setShowRecordingModal(false);
+            if (user) fetchUserRecordings(user.uid);
+          }}
+          onCancel={() => setShowRecordingModal(false)}
+        />
+      )}
+      
+      {showUploadModal && (
+        <FileUploadCallModal
+          onComplete={() => {
+            setShowUploadModal(false);
+            if (user) fetchUserRecordings(user.uid);
+          }}
+          onCancel={() => setShowUploadModal(false)}
+        />
+      )}
     </div>
   );
 };

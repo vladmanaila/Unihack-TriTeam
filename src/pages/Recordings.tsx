@@ -75,6 +75,31 @@ const Recordings = () => {
     }
   };
 
+  const parseDuration = (duration?: string): number => {
+    if (!duration) return 0;
+    const parts = duration.split(':');
+    if (parts.length === 2) {
+      const minutes = parseInt(parts[0]) || 0;
+      const seconds = parseInt(parts[1]) || 0;
+      return minutes + (seconds / 60);
+    }
+    return 0;
+  };
+
+  const calculateTotalHours = (): string => {
+    const totalMinutes = recordings.reduce((sum, rec) => {
+      return sum + parseDuration(rec.duration);
+    }, 0);
+    
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = Math.round(totalMinutes % 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
+  };
+
   const getSentimentColor = (score: number) => {
     if (score >= 80) return "bg-secondary text-secondary-foreground";
     if (score >= 60) return "bg-primary text-primary-foreground";
@@ -150,7 +175,7 @@ const Recordings = () => {
               <Clock className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{(recordings.length * 0.5).toFixed(1)}h</div>
+              <div className="text-2xl font-bold">{calculateTotalHours()}</div>
               <p className="text-xs text-muted-foreground">Analyzed content</p>
             </CardContent>
           </Card>
