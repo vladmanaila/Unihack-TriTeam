@@ -57,8 +57,6 @@ export const useSalesCoach = () => {
     const azureSegmentsRef = useRef<AzureSpeakerSegment[]>([]);
     const combinedTranscriptRef = useRef<CombinedSegment[]>([]);
 
-    
-
     // Load Azure SDK
     useEffect(() => {
         if ((window as any).SpeechSDK) {
@@ -265,7 +263,7 @@ const startAzureDiarization = useCallback(async () => {
                 console.log(`🎤 ${rawSpeakerId}: "${e.result.text}"`);
                 
                 const segment: AzureSpeakerSegment = {
-                    speakerId: rawSpeakerId,  // Keep raw ID for now
+                    speakerId: rawSpeakerId,  // Keep raw ID
                     text: e.result.text,
                     start: currentTime - duration,
                     end: currentTime
@@ -304,56 +302,6 @@ const startAzureDiarization = useCallback(async () => {
         setError('Failed to start speaker identification.');
     }
 }, [analyzeTextWithGemini, mergeSegments, cleanup]);
-
-// Better microphone configuration
-const startRecordingOptimized = useCallback(async () => {
-    try {
-        setRecordingState(RecordingState.RECORDING);
-        setError(null);
-        
-        geminiSegmentsRef.current = [];
-        azureSegmentsRef.current = [];
-        combinedTranscriptRef.current = [];
-        audioChunksRef.current = [];
-        speakerNamesRef.current.clear();
-        
-        recordingStartTimeRef.current = Date.now();
-        initializeGeminiModel();
-        
-        // Request high-quality audio with specific constraints
-        const stream = await navigator.mediaDevices.getUserMedia({ 
-            audio: {
-                echoCancellation: true,
-                noiseSuppression: true,
-                autoGainControl: true,
-                sampleRate: 16000,  // 16kHz is optimal for speech
-                channelCount: 1      // Mono audio
-            } 
-        });
-        
-        const mediaRecorder = new MediaRecorder(stream, { 
-            mimeType: 'audio/webm',
-            audioBitsPerSecond: 128000  // Good quality
-        });
-        mediaRecorderRef.current = mediaRecorder;
-        
-        mediaRecorder.ondataavailable = (event) => {
-            if (event.data.size > 0) {
-                audioChunksRef.current.push(event.data);
-            }
-        };
-        
-        mediaRecorder.start(1000);
-        await startAzureDiarization();
-        
-        console.log("✓ Recording started with optimized audio settings");
-        
-    } catch (error) {
-        console.error('Start recording error:', error);
-        setError('Failed to start recording. Please check microphone permissions.');
-        setRecordingState(RecordingState.IDLE);
-    }
-}, [initializeGeminiModel, startAzureDiarization]);
 
     const formatTime = (seconds: number): string => {
         const mins = Math.floor(seconds / 60);
@@ -417,19 +365,17 @@ const startRecordingOptimized = useCallback(async () => {
         
         let engagement = 50;
 
-if (wordsPerMinute > 0) {
-    // Normalize WPM into a 0–1 range between 80 and 200 WPM
-    const minWpm = 80;
-    const maxWpm = 200;
+        if (wordsPerMinute > 0) {
+            const minWpm = 80;
+            const maxWpm = 200;
 
-    const normalized = Math.min(
-        1,
-        Math.max(0, (wordsPerMinute - minWpm) / (maxWpm - minWpm))
-    );
+            const normalized = Math.min(
+                1,
+                Math.max(0, (wordsPerMinute - minWpm) / (maxWpm - minWpm))
+            );
 
-    // Engagement goes from 20 to 95
-    engagement = Math.round(20 + normalized * 75);
-}
+            engagement = Math.round(20 + normalized * 75);
+        }
 
         const avgSentiment = sentimentCount > 0 
             ? Math.round(totalSentimentScore / sentimentCount)
@@ -482,161 +428,6 @@ if (wordsPerMinute > 0) {
 
         return points;
     };
-
-    // NEW: Correct speaker identification using context
-    const correctSpeakerIdentification = useCallback(async (segments: CombinedSegment[]): Promise<CombinedSegment[]> => {
-        if (segments.length === 0) return segments;
-        
-        try {
-            const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
-            
-            const conversationText = segments
-                .map((seg, idx) => `${idx}|${seg.speaker}|${seg.text}`)
-                .join('\n');
-            
-            const prompt = `You are a conversation analysis AI specializing in sales call transcription correction.
-
-CRITICAL TASK: Fix speaker identification errors in this sales conversation.
-
-RULES FOR SPEAKER IDENTIFICATION:
-1. **Salesperson behaviors:**
-   - Presents products/features ("I want to sell", "This product has", "We offer")
-   - Asks discovery questions ("What do you need?", "Do you have?")
-   - Handles objections and pushes forward
-   
-2. **Customer behaviors:**
-   - Responds to questions ("I'm good", "I have many laptops")
-   - Asks about products ("What product?", "Why?")
-   - Makes decisions ("I don't need", "I need to find somebody else")
-
-3. **CRITICAL - SPLIT MIXED SEGMENTS:**
-   Look for segments where BOTH speakers are talking:
-   - Question + Answer in same segment → MUST SPLIT
-   - Statement + Question in same segment → MUST SPLIT
-   - Any conversation turn that changes topic/direction → MUST SPLIT
-   - When you see "What product? It is a laptop." → These are 2 different speakers!
-
-EXAMPLES OF WHAT TO SPLIT:
-❌ BAD: "What product? It is a laptop." (Question + Answer = 2 speakers!)
-✅ GOOD: Split into → "What product?" | "It is a laptop."
-
-❌ BAD: "I want to sell your product. What product?" (Statement + Question from different context)
-✅ GOOD: Split into → "I want to sell your product." | "What product?"
-
-RETURN FORMAT:
-{
-  "corrections": [
-    {"index": 0, "correctedSpeaker": "Salesperson"}
-  ],
-  "splits": [
-    {
-      "originalIndex": 2,
-      "segments": [
-        {"speaker": "Customer", "text": "What product?"},
-        {"speaker": "Salesperson", "text": "It is a laptop."}
-      ]
-    }
-  ]
-}
-
-**Be VERY aggressive with splitting** - when in doubt, split it!
-
-Conversation:
-${conversationText}
-
-Return ONLY valid JSON, no markdown:`;
-
-            const result = await model.generateContent([prompt]);
-            let responseText = result.response.text();
-            responseText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-            
-            try {
-                const response = JSON.parse(responseText) as {
-                    corrections: Array<{index: number, correctedSpeaker: string}>,
-                    splits: Array<{originalIndex: number, segments: Array<{speaker: string, text: string}>}>
-                };
-                
-                let correctedSegments = [...segments];
-                
-                // First, apply splits (from end to beginning to maintain indices)
-                if (response.splits && response.splits.length > 0) {
-                    response.splits.sort((a, b) => b.originalIndex - a.originalIndex).forEach(split => {
-                        const originalSeg = correctedSegments[split.originalIndex];
-                        const duration = originalSeg.end - originalSeg.start;
-                        const timePerSegment = duration / split.segments.length;
-                        
-                        const newSegments = split.segments.map((seg, i) => ({
-                            speaker: seg.speaker,
-                            text: seg.text,
-                            emotion: originalSeg.emotion,
-                            sentiment: originalSeg.sentiment,
-                            start: originalSeg.start + (i * timePerSegment),
-                            end: originalSeg.start + ((i + 1) * timePerSegment)
-                        }));
-                        
-                        // Replace original segment with split segments
-                        correctedSegments.splice(split.originalIndex, 1, ...newSegments);
-                        console.log(`Split segment ${split.originalIndex} into ${split.segments.length} parts`);
-                    });
-                }
-                
-                // Then apply corrections
-                if (response.corrections && response.corrections.length > 0) {
-                    correctedSegments = correctedSegments.map((seg, idx) => {
-                        const correction = response.corrections.find(c => c.index === idx);
-                        if (correction) {
-                            console.log(`Correcting segment ${idx}: ${seg.speaker} -> ${correction.correctedSpeaker}`);
-                            return {
-                                ...seg,
-                                speaker: correction.correctedSpeaker
-                            };
-                        }
-                        return seg;
-                    });
-                }
-                
-                // Finally, map any remaining Speaker A/B to roles
-                const speakerMapping = new Map<string, string>();
-                correctedSegments.forEach(seg => {
-                    if (seg.speaker === 'Salesperson' || seg.speaker === 'Customer') {
-                        // Already corrected
-                    } else if (!speakerMapping.has(seg.speaker)) {
-                        const isLikelySalesperson = 
-                            seg.text.toLowerCase().includes('can i') ||
-                            seg.text.toLowerCase().includes('let me') ||
-                            seg.text.toLowerCase().includes('our product') ||
-                            seg.text.toLowerCase().includes('we offer') ||
-                            seg.text.toLowerCase().includes('would you') ||
-                            seg.text.toLowerCase().includes('tell me about');
-                        
-                        speakerMapping.set(
-                            seg.speaker, 
-                            isLikelySalesperson ? 'Salesperson' : 'Customer'
-                        );
-                    }
-                });
-                
-                return correctedSegments.map(seg => {
-                    if (seg.speaker === 'Salesperson' || seg.speaker === 'Customer') {
-                        return seg;
-                    }
-                    return {
-                        ...seg,
-                        speaker: speakerMapping.get(seg.speaker) || seg.speaker
-                    };
-                });
-                
-            } catch (parseError) {
-                console.error('Failed to parse speaker corrections:', parseError);
-                return segments;
-            }
-            
-        } catch (error) {
-            console.error('Speaker correction error:', error);
-            return segments;
-        }
-    }, []);
 
     // Save to Firebase
     const saveToFirebase = async (
@@ -705,13 +496,10 @@ Return ONLY valid JSON, no markdown:`;
         const questions: string[] = [];
         
         segments.forEach(seg => {
-            // Check if text contains a question mark
             if (seg.text.includes('?')) {
-                // Split by periods and question marks to get individual sentences
                 const sentences = seg.text.split(/[.!?]+/).map(s => s.trim()).filter(s => s.length > 0);
                 
                 sentences.forEach(sentence => {
-                    // Check if this specific sentence is a question
                     if (seg.text.includes(sentence + '?') || 
                         sentence.toLowerCase().startsWith('what') ||
                         sentence.toLowerCase().startsWith('how') ||
@@ -737,11 +525,10 @@ Return ONLY valid JSON, no markdown:`;
         return questions;
     }, []);
 
-    // Extract keywords and their frequency from transcript using NLP approach
+    // Extract keywords and their frequency from transcript
     const extractKeywords = useCallback((segments: CombinedSegment[]): { [key: string]: number } => {
         const keywords: { [key: string]: number } = {};
         
-        // Stop words to ignore (common words that aren't meaningful)
         const stopWords = new Set([
             'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
             'of', 'with', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
@@ -761,28 +548,24 @@ Return ONLY valid JSON, no markdown:`;
             .map(seg => seg.text)
             .join(' ');
         
-        // Extract all words (2+ characters, alphanumeric)
         const words = fullText
             .toLowerCase()
-            .replace(/[^\w\s]/g, ' ') // Remove punctuation
+            .replace(/[^\w\s]/g, ' ')
             .split(/\s+/)
             .filter(word => 
                 word.length >= 2 && 
                 !stopWords.has(word) &&
-                !/^\d+$/.test(word) // Exclude pure numbers
+                !/^\d+$/.test(word)
             );
         
-        // Count word frequency
         words.forEach(word => {
             keywords[word] = (keywords[word] || 0) + 1;
         });
         
-        // Filter out words mentioned only once (likely not important)
-        // and sort by frequency
         const sortedKeywords = Object.entries(keywords)
-            .filter(([, count]) => count >= 2) // Keep only words mentioned 2+ times
+            .filter(([, count]) => count >= 2)
             .sort(([, a], [, b]) => b - a)
-            .slice(0, 30) // Keep top 30 keywords
+            .slice(0, 30)
             .reduce((obj, [key, value]) => {
                 obj[key] = value;
                 return obj;
@@ -815,11 +598,9 @@ Return ONLY valid JSON, no markdown:`;
                 return;
             }
             
-            // Extract all questions from transcript
             const allQuestions = extractAllQuestions(combinedTranscriptRef.current);
             console.log('Extracted questions:', allQuestions);
             
-            // Extract keywords from transcript
             const extractedKeywords = extractKeywords(combinedTranscriptRef.current);
             console.log('Extracted keywords:', extractedKeywords);
             
@@ -871,8 +652,8 @@ ${fullTranscript}`
                         parsed.strengths || [],
                         parsed.opportunities || [],
                         parsed.competitors || [],
-                        extractedKeywords, // Use extracted keywords instead of Gemini's
-                        allQuestions // Use extracted questions instead of Gemini's questions
+                        extractedKeywords,
+                        allQuestions
                     );
                 } catch (parseError) {
                     console.error('Failed to parse Gemini JSON:', parseError);
@@ -882,8 +663,8 @@ ${fullTranscript}`
                         [],
                         [],
                         [],
-                        extractedKeywords, // Use extracted keywords
-                        allQuestions // Use extracted questions
+                        extractedKeywords,
+                        allQuestions
                     );
                 }
 
@@ -895,8 +676,8 @@ ${fullTranscript}`
                     [],
                     [],
                     [],
-                    extractedKeywords, // Use extracted keywords
-                    allQuestions // Use extracted questions
+                    extractedKeywords,
+                    allQuestions
                 );
             }
 
@@ -929,8 +710,20 @@ ${fullTranscript}`
             
             initializeGeminiModel();
             
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                    sampleRate: 16000,
+                    channelCount: 1
+                } 
+            });
+            
+            const mediaRecorder = new MediaRecorder(stream, { 
+                mimeType: 'audio/webm',
+                audioBitsPerSecond: 128000
+            });
             mediaRecorderRef.current = mediaRecorder;
             
             mediaRecorder.ondataavailable = (event) => {
@@ -941,6 +734,8 @@ ${fullTranscript}`
             
             mediaRecorder.start(1000);
             await startAzureDiarization();
+            
+            console.log("✓ Recording started with optimized audio settings");
             
         } catch (error) {
             console.error('Start recording error:', error);
@@ -964,19 +759,8 @@ ${fullTranscript}`
         await new Promise(resolve => setTimeout(resolve, 2000));
         mergeSegments();
         
-        // NEW: Correct speaker identification before analysis
-        console.log('Correcting speaker identification...');
-        const correctedSegments = await correctSpeakerIdentification(combinedTranscriptRef.current);
-        combinedTranscriptRef.current = correctedSegments;
-        
-        // Update transcript display with corrected speakers
-        const displayText = correctedSegments
-            .map(seg => `[${seg.speaker}] ${seg.text} ${seg.emotion ? `(${seg.emotion})` : ''}`)
-            .join('\n');
-        setTranscript(displayText);
-        
         await analyzeFullRecording();
-    }, [mergeSegments, analyzeFullRecording, correctSpeakerIdentification]);
+    }, [mergeSegments, analyzeFullRecording]);
 
     const reset = useCallback(() => {
         cleanup();

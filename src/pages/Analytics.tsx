@@ -199,30 +199,6 @@ const Analytics = () => {
 
       yPosition += lineHeight;
 
-      // Coaching Insights
-      if (recording.coachingCard.length > 0) {
-        pdf.setFontSize(16);
-        pdf.setFont('helvetica', 'bold');
-        if (yPosition > 250) {
-          pdf.addPage();
-          yPosition = 20;
-        }
-        pdf.text('Coaching Insights', margin, yPosition);
-        yPosition += lineHeight;
-
-        pdf.setFontSize(12);
-        pdf.setFont('helvetica', 'normal');
-        recording.coachingCard.forEach(card => {
-          if (yPosition > 270) {
-            pdf.addPage();
-            yPosition = 20;
-          }
-          pdf.text(`• ${card}`, margin, yPosition);
-          yPosition += lineHeight;
-        });
-        yPosition += lineHeight;
-      }
-
       // Strengths
       if (recording.strengths && recording.strengths.length > 0) {
         pdf.setFontSize(16);
@@ -515,64 +491,6 @@ const Analytics = () => {
           </CardContent>
         </Card>
 
-        {/* Coaching Insights */}
-        <Card className="shadow-card mb-8">
-          <CardHeader>
-            <CardTitle>Coaching Insights</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {recording.coachingCard.map((card, index) => {
-                const isStrength = card.startsWith('STRENGTH');
-                return (
-                  <div
-                    key={index}
-                    className={`p-4 rounded-lg border-l-4 ${
-                      isStrength
-                        ? 'bg-green-50 border-green-500'
-                        : 'bg-yellow-50 border-yellow-500'
-                    }`}
-                  >
-                    <p className="text-sm">{card}</p>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Sentiment Over Time */}
-        <Card className="shadow-card mb-8">
-          <CardHeader>
-            <CardTitle>Sentiment Over Time</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={sentimentData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="time" />
-                <YAxis domain={[0, 100]} />
-                <Tooltip 
-                  formatter={(value) => [`${value}%`, 'Sentiment']}
-                  labelFormatter={(label) => `Time: ${label}`}
-                />
-                <Line 
-                  type="monotone" 
-                  dataKey="sentiment" 
-                  stroke="#8884d8" 
-                  strokeWidth={2}
-                  dot={{ fill: '#8884d8', strokeWidth: 2, r: 4 }}
-                  activeDot={{ r: 6, fill: '#8884d8' }}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-            <div className="text-center text-sm text-muted-foreground mt-4">
-              <p>Sentiment evolution throughout the conversation</p>
-              <p className="text-xs">Points show average sentiment at different time intervals</p>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Strengths */}
         {recording.strengths && recording.strengths.length > 0 && (
           <Card className="shadow-card mb-8">
@@ -616,6 +534,38 @@ const Analytics = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* Sentiment Over Time */}
+        <Card className="shadow-card mb-8">
+          <CardHeader>
+            <CardTitle>Sentiment Over Time</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={sentimentData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="time" />
+                <YAxis domain={[0, 100]} />
+                <Tooltip 
+                  formatter={(value) => [`${value}%`, 'Sentiment']}
+                  labelFormatter={(label) => `Time: ${label}`}
+                />
+                <Line 
+                  type="monotone" 
+                  dataKey="sentiment" 
+                  stroke="#8884d8" 
+                  strokeWidth={2}
+                  dot={{ fill: '#8884d8', strokeWidth: 2, r: 4 }}
+                  activeDot={{ r: 6, fill: '#8884d8' }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+            <div className="text-center text-sm text-muted-foreground mt-4">
+              <p>Sentiment evolution throughout the conversation</p>
+              <p className="text-xs">Points show average sentiment at different time intervals</p>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Keywords */}
         {recording.keywords && Object.keys(recording.keywords).length > 0 && (
