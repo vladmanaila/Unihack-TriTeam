@@ -124,38 +124,82 @@ const RealtimeCallModal: React.FC<RealtimeCallModalProps> = ({ onComplete, onCan
                                 </div>
                             </div>
 
-                            {/* Real-time Feedback */}
-                            <div className="bg-gray-50 p-4 rounded-lg overflow-y-auto border">
-                                <h3 className="font-bold text-gray-800 mb-3">
-                                    AI Coach Feedback
-                                </h3>
-                                <ul className="space-y-2">
+                           {/* Real-time Feedback */}
+                            <div className="bg-gradient-to-br from-gray-50 to-gray-100 p-4 rounded-lg overflow-y-auto border border-gray-200 shadow-sm">
+                                <div className="flex items-center gap-2 mb-4">
+                                    <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-blue-500 rounded-lg flex items-center justify-center">
+                                    </div>
+                                    <h3 className="font-bold text-gray-800">
+                                        AI Coach Feedback
+                                    </h3>
+                                </div>
+                                <div className="space-y-3">
                                     {realtimeFeedback.map((fb, i) => {
-                                        const isPraise = fb.toLowerCase().includes('praise');
+                                        const lower = fb.toLowerCase();
+                                        const isStrength = lower.includes('good') || lower.includes('strong') || 
+                                                         lower.includes('excellent') || lower.includes('well done') ||
+                                                         lower.includes('great') || lower.includes('praise');
+                                        const isWarning = lower.includes('avoid') || lower.includes("don't") || 
+                                                        lower.includes('stop') || lower.includes('never') ||
+                                                        lower.includes('weak') || lower.includes('improve');
+                                        
+                                        const config = isStrength
+                                            ? {
+                                                  border: 'border-green-200',
+                                                  bg: 'bg-gradient-to-r from-green-50 to-emerald-50',
+                                                  icon: '🎯',
+                                                  iconBg: 'bg-green-500',
+                                                  textColor: 'text-green-900'
+                                              }
+                                            : isWarning
+                                            ? {
+                                                  border: 'border-amber-200',
+                                                  bg: 'bg-gradient-to-r from-amber-50 to-orange-50',
+                                                  icon: '⚠️',
+                                                  iconBg: 'bg-amber-500',
+                                                  textColor: 'text-amber-900'
+                                              }
+                                            : {
+                                                  border: 'border-blue-200',
+                                                  bg: 'bg-gradient-to-r from-blue-50 to-indigo-50',
+                                                  icon: '💡',
+                                                  iconBg: 'bg-blue-500',
+                                                  textColor: 'text-blue-900'
+                                              };
+                                        
                                         return (
-                                            <li 
-                                                key={i} 
-                                                className={`text-sm p-3 rounded-lg ${
-                                                    isPraise 
-                                                        ? 'bg-green-50 border-l-4 border-green-500 text-green-900' 
-                                                        : 'bg-yellow-50 border-l-4 border-yellow-500 text-yellow-900'
-                                                }`}
+                                            <div
+                                                key={i}
+                                                className={`p-4 rounded-xl border-2 ${config.border} ${config.bg} transform transition-all duration-300 hover:scale-102 hover:shadow-md animate-in slide-in-from-right`}
+                                                style={{ animationDelay: `${i * 100}ms` }}
                                             >
-                                                <div className="flex items-start gap-2">
-                                                    <span className="text-lg">
-                                                        {isPraise ? '✅' : '💡'}
-                                                    </span>
-                                                    <span>{fb}</span>
+                                                <div className="flex items-start gap-3">
+                                                    <div className={`flex-shrink-0 w-8 h-8 ${config.iconBg} rounded-full flex items-center justify-center shadow-sm`}>
+                                                        <span className="text-sm">{config.icon}</span>
+                                                    </div>
+                                                    <div className="flex-1 min-w-0">
+                                                        <p className={`${config.textColor} text-sm leading-relaxed font-medium`}>
+                                                            {fb}
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                            </li>
+                                            </div>
                                         );
                                     })}
                                     {realtimeFeedback.length === 0 && (
-                                        <p className="text-gray-400 text-center py-8">
-                                            AI feedback will appear here...
-                                        </p>
+                                        <div className="text-center py-12">
+                                            <div className="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-gray-200 to-gray-300 rounded-full flex items-center justify-center">
+                                                <span className="text-2xl">💬</span>
+                                            </div>
+                                            <p className="text-gray-400 text-sm">
+                                                AI feedback will appear here...
+                                            </p>
+                                            <p className="text-gray-300 text-xs mt-1">
+                                                Start speaking to receive coaching tips
+                                            </p>
+                                        </div>
                                     )}
-                                </ul>
+                                </div>
                             </div>
                         </div>
                     </>

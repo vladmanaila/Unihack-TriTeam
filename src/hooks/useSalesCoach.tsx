@@ -198,7 +198,7 @@ Text: "${text}"`
     const initializeGeminiModel = useCallback(() => {
         try {
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
             geminiModelRef.current = model;
             console.log('Gemini model initialized');
         } catch (error) {
@@ -579,7 +579,7 @@ const startAzureDiarization = useCallback(async () => {
     const analyzeFullRecording = useCallback(async () => {
         try {
             const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+            const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
             
             const fullTranscript = combinedTranscriptRef.current
                 .map(seg => `[${seg.speaker}] ${seg.text}`)
